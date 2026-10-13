@@ -16,8 +16,17 @@ a fresh randomized variant each attempt.
 
 ```bash
 export HUNTRESS_GM_TOKEN=gm1.....            # your Game Master bearer (never commit it)
-python3 huntress-ctf/solve_day.py N          # solves single + time_trial + mastery
+python3 huntress-ctf/solve_day.py N          # solves single + time_trial + mastery (untimed)
+python3 huntress-ctf/solve_day.py N --ranked # also grab Hall of Fame where the route supports it
+python3 huntress-ctf/solve_day.py N --parallel          # run the 3 modes concurrently (untimed)
+python3 huntress-ctf/solve_any.py <route>    # one route, e.g. ...-day-10-...-/time_trial
 ```
+
+Flags: `--ranked` tries a timed HoF attempt per mode and auto-falls-back to an
+untimed solve if it misses the window (so the flag is always captured).
+`--parallel` runs the three modes at once — great for untimed throughput, but
+**don't combine with `--ranked`** (concurrent timed attempts contend for server
+write-throughput and can cost a borderline HoF window).
 
 Internally, for each mode route it:
 1. starts an **untimed** attempt (we skip Hall-of-Fame, so no 7s timer),
@@ -78,14 +87,28 @@ These were learned the hard way; they dictate the whole strategy:
    The only way to bank `control`/`expansion` is to find each id's correct
    value and submit it (individually, or in an all-correct group).
 
-### Timed vs untimed
-- `single_solve`: always untimed (`deadline: null`).
-- `time_trial` / `mastery`: on routes that advertise `run_for_time`, a plain
-  start is **untimed** (regular variant, not HoF). Add `run_for_time:true`
-  (via `op:retry`) to get the ranked **7-second** timer + HoF eligibility.
-  Older routes (e.g. Day 6) are timed-by-default with a *lenient* grading
-  window (~8–10s). **We skip HoF**, so always use the untimed path — no timer,
-  the parallel brute finishes comfortably.
+### Timed vs untimed, and Hall of Fame
+- `single_solve`: always untimed (`deadline: null`). No HoF.
+- `time_trial` / `mastery`: a plain start is **untimed** (regular variant, not
+  HoF). Add `"run_for_time":true` (prefer `op:retry`) to get a ranked attempt:
+  a **7-second** `deadline` (grading is lenient to ~10–15s) and
+  `hall_of_fame_eligible:true`. A ranked solve registers HoF **even if the
+  challenge was already solved untimed**, so you can go back for HoF later.
+- Not all routes offer timed mode: some return `error:
+  timed_intent_not_available` (and/or `retry_variants_unavailable`). Those
+  cannot be HoF — the solver detects this and just confirms the untimed solve.
+
+**What actually fits the ranked window** (measured):
+- **time_trial ranked**: ~1 set (27 control/expansion ids) → finishes in
+  ~3–10s → **HoF reliably**.
+- **mastery ranked**: the bundle is a *random* number of sets per attempt.
+  ≤2 sets (~54 brute ids) finish in ~7–13s → **HoF**. 5 sets (~135 ids) take
+  ~20–37s → **expire** (no HoF). The ceiling is the control/expansion brute
+  (unclassifiable → must be bruted; see §5), not decode. So: try ranked, and
+  take the untimed fallback for big bundles. Retrying a mastery a few times can
+  land a smaller bundle if you specifically want its HoF.
+- Parallel per-set decode (built in) keeps prep fast even for 5-set bundles
+  (~3500 questions decoded in ~11s); it does not change the brute ceiling.
 
 ---
 
@@ -262,8 +285,11 @@ styles, attack, …) get added to the parallel brute; **exact** kinds
 (campaign/url/stage_profile/transform/…) failing means a **decode bug** — the
 solver prints them as `STUCK ... exact-kind` so you can fix the decoder.
 
-Performance: single ≈ 10s, time_trial ≈ 10s, mastery (5 sets ≈ 3000 Q) ≈ a few
-minutes (mostly the ~135 parallel control/expansion brute submits).
+Performance (untimed, keep-alive session + parallel per-set decode + parallel
+per-id brute): single/time_trial ≈ 5–12s; mastery ≈ 12s for 2 sets, ≈ 30–40s
+for 5 sets. The long pole is always the control/expansion per-id brute
+(~27 ids/set). `--ranked` adds a 7s (lenient ~10–15s) timer — see §1 for what
+fits; the ranked→untimed fallback in `solve_day` guarantees the flag regardless.
 
 ---
 

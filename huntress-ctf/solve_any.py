@@ -47,55 +47,81 @@ def unz(src, dd):
         z.extractall(dd)
 
 
-def solve_route(CH, verbose=True):
+def solve_route(CH, verbose=True, ranked=False):
     t0 = time.time()
     def log(m):
         if verbose:
             print('[%.1fs] %s' % (time.time() - t0, m))
-    start = None
-    for body in ({'op': 'retry', 'challenge': CH}, {'challenge': CH}):
+    if ranked:
+        bodies = ({'op': 'retry', 'challenge': CH, 'run_for_time': True},
+                  {'challenge': CH, 'run_for_time': True},
+                  {'op': 'retry', 'challenge': CH}, {'challenge': CH})
+    else:
+        bodies = ({'op': 'retry', 'challenge': CH}, {'challenge': CH})
+    # Ranked bodies try run_for_time first (fresh timed attempt = HoF); they fall
+    # back to untimed. A route with no timed mode returns timed_intent_not_available.
+    start = None; solved = False
+    for body in bodies:
         r = gm.post(body)
-        if r.get('result') in ('CORRECT', 'already_solved'):
-            st = gm.status(CH)
-            log('already solved: flag=%s' % st.get('flag'))
+        if not ranked and r.get('result') in ('CORRECT', 'already_solved'):
+            st = gm.status(CH); log('already solved: flag=%s' % st.get('flag'))
             return 'CORRECT', st.get('flag')
+        if r.get('result') in ('CORRECT', 'already_solved'):
+            solved = True; continue
         if 'questions' in r and (r.get('artifacts') or r.get('download')):
-            start = r
-            break
+            start = r; break
     if start is None:
+        st = gm.status(CH)
+        if solved or st.get('result') == 'CORRECT':
+            log('already solved (no fresh/timed variant to start): flag=%s' % st.get('flag'))
+            return 'CORRECT', st.get('flag')
         log('cannot start: %r' % {k: r.get(k) for k in ('result', 'error')})
         return None, None
+    if ranked and not (start.get('deadline') or start.get('run_for_time')):
+        log('note: ranked timed attempt not granted (route may not support HoF); solving untimed')
     qs = start['questions']; ids = start['answer_ids']
     base = tempfile.mkdtemp(prefix='slv_')
     ans = {}
     multi = any('.' in i for i in ids)
 
-    def solve_set(dd, sub, tag=None):
-        for k, v in S.solve(dd, sub).items():
-            ans[(tag + '.' + k) if tag else k] = v
-
     def subq(tag):
         return [{'id': q['id'].split('.', 1)[1], 'artifact': q['artifact'],
                  'answer_format': q['answer_format']} for q in qs if q['id'].startswith(tag + '.')]
 
+    # Each mastery set is independent -> decode them in parallel (download + extract
+    # + node-backed solve). Threads are fine: requests session is pooled/thread-safe,
+    # each set writes a separate dir, and each returns its own dict to merge.
+    def decode_set(job):
+        dd, sub, tag, src = job
+        os.makedirs(dd, exist_ok=True)
+        if src[0] == 'dl':
+            z = os.path.join(dd, 'z.zip'); gm.download(src[1], z); unz(z, dd)
+        else:  # already-extracted inner zip at src[1]
+            unz(src[1], dd)
+        return tag, S.solve(dd, sub)
+
     if multi:
         arts = start.get('artifacts') or []
         tags = sorted({i.split('.', 1)[0] for i in ids})
+        jobs = []
         if arts and len(arts) >= len(tags):
             for idx, tag in enumerate(tags):
-                dd = os.path.join(base, tag); z = os.path.join(dd, 'z.zip')
-                os.makedirs(dd, exist_ok=True); gm.download(arts[idx]['download'], z); unz(z, dd)
-                solve_set(dd, subq(tag), tag)
+                jobs.append((os.path.join(base, tag), subq(tag), tag, ('dl', arts[idx]['download'])))
         else:
             oz = os.path.join(base, 'o.zip'); gm.download(start['download'], oz); unz(oz, base)
             inners = sorted(f for f in os.listdir(base) if f.endswith('.zip') and f != 'o.zip')
             for tag, inner in zip(tags, inners):
-                dd = os.path.join(base, tag); unz(os.path.join(base, inner), dd)
-                solve_set(dd, subq(tag), tag)
+                jobs.append((os.path.join(base, tag), subq(tag), tag, ('inner', os.path.join(base, inner))))
+        with ThreadPoolExecutor(max_workers=min(len(jobs), 8)) as pool:
+            for tag, d in pool.map(decode_set, jobs):
+                for k, v in d.items():
+                    ans[tag + '.' + k] = v
     else:
         z = os.path.join(base, 'z.zip')
         gm.download(start.get('download') or start['artifacts'][0]['download'], z)
-        unz(z, base); solve_set(base, qs)
+        unz(z, base)
+        for k, v in S.solve(base, qs).items():
+            ans[k] = v
 
     kof = {i: S.kind_of(i.split('.', 1)[-1]) for i in ids}
     undec = [i for i in ids if ans.get(i) in (None, '')]
@@ -105,12 +131,6 @@ def solve_route(CH, verbose=True):
     reliable = [i for i in ids if kof[i] not in HARD and ans.get(i) not in (None, '')]
     rr = gm.submit(CH, {i: ans[i] for i in reliable}).get('result')
     log('reliable group: %s' % rr)
-
-    def brute(i):
-        for c in [ans.get(i)] + [x for x in cpool(i, kof[i]) if x != ans.get(i)]:
-            if c and gm.submit(CH, {i: c}).get('result') in ('accepted', 'CORRECT', 'already_solved'):
-                return i, c
-        return i, None
 
     targets = [i for i in ids if kof[i] in HARD]
     if rr not in ('accepted', 'CORRECT'):  # a reliable kind is wrong (new day) -> localize
@@ -125,21 +145,37 @@ def solve_route(CH, verbose=True):
                     qf = {q['id']: q['artifact'].split('-> ')[-1] for q in qs}
                     log('!! exact-kind wrong (decode bug?): %s e.g. %s in %s'
                         % (kind, gl[0], qf.get(gl[0])))
+    # Per-id parallel brute on one persistent pool: each worker tries an id's
+    # candidates in order (detector guess first) and stops at the first that banks.
+    # Monotonic banking makes earlier wrong tries harmless. This beat a round-based
+    # scheme in practice (no per-round pool churn); keep-alive session keeps it fast.
+    def brute(i):
+        seen = set()
+        for c in ([ans.get(i)] + cpool(i, kof[i])):
+            if not c or c in seen:
+                continue
+            seen.add(c)
+            if gm.submit(CH, {i: c}).get('result') in ('accepted', 'CORRECT', 'already_solved'):
+                return i, c
+        return i, None
     stuck = []
-    with ThreadPoolExecutor(max_workers=12) as pool:
-        for i, c in pool.map(brute, targets):
-            if c:
-                ans[i] = c
-            else:
-                stuck.append(i)
+    if targets:
+        with ThreadPoolExecutor(max_workers=min(len(targets), 32)) as pool:
+            for i, c in pool.map(brute, targets):
+                if c:
+                    ans[i] = c
+                else:
+                    stuck.append(i)
     log('bruted %d ids, stuck %d' % (len(targets), len(stuck)))
 
     gm.submit(CH, {i: ans[i] for i in ids if ans.get(i) not in (None, '')})
     st = gm.status(CH)
     log('FINAL result=%s flag=%s' % (st.get('result'), st.get('flag')))
-    if stuck:
+    if stuck and st.get('result') != 'CORRECT':
         qf = {q['id']: q['artifact'].split('-> ')[-1] for q in qs}
-        for i in stuck[:40]:
+        bk = collections.Counter(kof[i] for i in stuck)
+        log('UNSOLVED stuck kinds=%s (first few below)' % dict(bk))
+        for i in stuck[:12]:
             print('  STUCK', i, kof[i], qf.get(i), repr(ans.get(i))[:40])
     return st.get('result'), st.get('flag')
 
