@@ -55,11 +55,15 @@ def solve_route(CH, verbose=True):
     start = None
     for body in ({'op': 'retry', 'challenge': CH}, {'challenge': CH}):
         r = gm.post(body)
+        if r.get('result') in ('CORRECT', 'already_solved'):
+            st = gm.status(CH)
+            log('already solved: flag=%s' % st.get('flag'))
+            return 'CORRECT', st.get('flag')
         if 'questions' in r and (r.get('artifacts') or r.get('download')):
             start = r
             break
     if start is None:
-        log('cannot start: %r' % r)
+        log('cannot start: %r' % {k: r.get(k) for k in ('result', 'error')})
         return None, None
     qs = start['questions']; ids = start['answer_ids']
     base = tempfile.mkdtemp(prefix='slv_')

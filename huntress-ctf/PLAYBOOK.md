@@ -313,5 +313,10 @@ Requirements: `python3`, `pyzipper` (`pip install pyzipper`), `node`, `curl`.
 | 7 | Node by Node | a96b646032cda18648e9af407f36826b | b488900d03eaf8bfa505a7c7426e37b2 | 92428248ee4d6a609080f2a737e2fdb6 |
 | 8 | Lost in Translation | b1a8c59aeba7bd73321ce29251d413b3 | eb93886d6d22b874d4b631ad00f1d903 | d2fd182d2189ea7dd5eb1414c39e98cd |
 | 9 | All the World's a Stager | 37c1351cba1d424bd5ad51e22ec53b4a | 92deeb8662fe75ed7940449c278e92cf | d48388d8186df83f4bff0cea53d0f07e |
+| 10 | Bind Over Matter | 49a4b7078f5d1c4530a8b21f772cbba0 | 4334851f13f26e559b003eb22aaddd4d | e510c993fd3dea2062632e92f9f6b3af |
+| 11 | By Any Other Name | f97fc28f12ab0eff9959e7fe14feb609 | 5c6ad5bb96839bdfe91db3e1d065febe | e6743b3ebd84dae152ea11ae3d35d796 |
+| 13 | Zip Code | 2e316ec6fabe5733c6dce3c9d90a336f | 9c1e02ac82c6a2ad5cd707e7f516cf62 | cf26d3dbfae8d8426a02e2f5e9beb03c |
 
-(Days 1–5 also exist in this lane; 10–12+ release daily.)
+(Days 1–5 and 12 also exist in this lane; new days release daily. Days 6–13
+verified with this toolkit; each new day needed at most a small decoder
+addition, none since Day 8.)
