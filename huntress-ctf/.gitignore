@@ -1,0 +1,8 @@
+# never commit secrets or runtime scratch
+*auth.cfg
+*.token
+gm/auth.cfg
+__pycache__/
+*.pyc
+slv_*/
+gmcfg_*/
