@@ -15,7 +15,10 @@ import gm
 from solve_any import solve_route
 
 args = sys.argv[1:]
-day = next(a for a in args if not a.startswith('--'))
+day = next((a for a in args if not a.startswith('--')), None)
+if day is None:
+    sys.exit('usage: HUNTRESS_GM_TOKEN=... python3 solve_day.py N '
+             '[--mode single_solve|time_trial|mastery] [--lane LANE] [--ranked] [--parallel]')
 mode = 'all'; lane = 'script-analysis'; ranked = '--ranked' in args; parallel = '--parallel' in args
 if '--mode' in args:
     mode = args[args.index('--mode') + 1]

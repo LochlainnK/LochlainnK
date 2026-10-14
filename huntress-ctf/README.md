@@ -9,7 +9,11 @@ python3 huntress-ctf/solve_day.py 10   # solves single + time_trial + mastery fo
 python3 huntress-ctf/solve_any.py script-analysis-day-10-wmi-persistence-reconstruction/time_trial
 ```
 
-Requirements: `python3`, `pyzipper`, `node`, `curl`.
+Requirements: `python3`, `node`, `curl`, and Python deps:
+
+```bash
+pip install -r huntress-ctf/requirements.txt
+```
 
 See **PLAYBOOK.md** for how it works, the Game Master API, submission semantics,
 every file/codec family, and how to extend it for a new day.
