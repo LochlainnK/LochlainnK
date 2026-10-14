@@ -47,7 +47,11 @@ def unz(src, dd):
         z.extractall(dd)
 
 
-def solve_route(CH, verbose=True, ranked=False):
+def solve_route(CH, verbose=True, ranked=False, priors=None):
+    # priors: {role-key -> control/expansion value learned on an earlier mode of the
+    # same challenge}, tried FIRST in the brute to shortcut it. Labels are per-variant
+    # so this is a shortcut when it matches, never a guarantee.
+    priors = priors or {}
     t0 = time.time()
     def log(m):
         if verbose:
@@ -65,7 +69,7 @@ def solve_route(CH, verbose=True, ranked=False):
         r = gm.post(body)
         if not ranked and r.get('result') in ('CORRECT', 'already_solved'):
             st = gm.status(CH); log('already solved: flag=%s' % st.get('flag'))
-            return 'CORRECT', st.get('flag')
+            return 'CORRECT', st.get('flag'), {}
         if r.get('result') in ('CORRECT', 'already_solved'):
             solved = True; continue
         if 'questions' in r and (r.get('artifacts') or r.get('download')):
@@ -74,9 +78,9 @@ def solve_route(CH, verbose=True, ranked=False):
         st = gm.status(CH)
         if solved or st.get('result') == 'CORRECT':
             log('already solved (no fresh/timed variant to start): flag=%s' % st.get('flag'))
-            return 'CORRECT', st.get('flag')
+            return 'CORRECT', st.get('flag'), {}
         log('cannot start: %r' % {k: r.get(k) for k in ('result', 'error')})
-        return None, None
+        return None, None, {}
     if ranked and not (start.get('deadline') or start.get('run_for_time')):
         log('note: ranked timed attempt not granted (route may not support HoF); solving untimed')
     qs = start['questions']; ids = start['answer_ids']
@@ -150,8 +154,9 @@ def solve_route(CH, verbose=True, ranked=False):
     # Monotonic banking makes earlier wrong tries harmless. This beat a round-based
     # scheme in practice (no per-round pool churn); keep-alive session keeps it fast.
     def brute(i):
+        rk = i.split('.', 1)[-1]
         seen = set()
-        for c in ([ans.get(i)] + cpool(i, kof[i])):
+        for c in ([priors.get(rk), ans.get(i)] + cpool(i, kof[i])):
             if not c or c in seen:
                 continue
             seen.add(c)
@@ -159,14 +164,19 @@ def solve_route(CH, verbose=True, ranked=False):
                 return i, c
         return i, None
     stuck = []
+    prior_hits = 0
     if targets:
         with ThreadPoolExecutor(max_workers=min(len(targets), 32)) as pool:
             for i, c in pool.map(brute, targets):
                 if c:
                     ans[i] = c
+                    if priors.get(i.split('.', 1)[-1]) == c:
+                        prior_hits += 1
                 else:
                     stuck.append(i)
-    log('bruted %d ids, stuck %d' % (len(targets), len(stuck)))
+    log('bruted %d ids, stuck %d%s' % (len(targets), len(stuck),
+        (' (prior hits %d/%d)' % (prior_hits, len(targets))) if priors and targets else ''))
+    learned = {i.split('.', 1)[-1]: ans[i] for i in targets if i not in stuck}
 
     gm.submit(CH, {i: ans[i] for i in ids if ans.get(i) not in (None, '')})
     st = gm.status(CH)
@@ -177,7 +187,7 @@ def solve_route(CH, verbose=True, ranked=False):
         log('UNSOLVED stuck kinds=%s (first few below)' % dict(bk))
         for i in stuck[:12]:
             print('  STUCK', i, kof[i], qf.get(i), repr(ans.get(i))[:40])
-    return st.get('result'), st.get('flag')
+    return st.get('result'), st.get('flag'), learned
 
 
 if __name__ == '__main__':

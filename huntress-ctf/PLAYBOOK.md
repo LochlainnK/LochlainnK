@@ -279,6 +279,17 @@ Because banking is atomic (§1.1):
    in **~4–8s**.
 4. **Final** full submit → `CORRECT`; read flag from status.
 
+**Mode order & knowledge transfer** (`solve_day.py`, default/sequential):
+solve **single_solve first** — untimed, no timer, so it's where the decoder is
+validated and any new family surfaces via `undecoded`/`STUCK` — then carry the
+control/expansion values it discovered forward as **priors** into
+**time_trial**, then into **mastery**. Each mode is a fresh randomized variant,
+so a prior is a *first-try shortcut* for the brute, not a guarantee; measured
+cross-variant hit rate is ~37% (vs ~17–25% random), which is a real speedup
+(e.g. a TT with priors finished in ~4s). Mastery's multiple sets decode in
+parallel inside `solve_route`. `--parallel` runs the three modes concurrently
+instead and forgoes priors threading (untimed throughput only).
+
 Fallback (robustness on a new day): if the reliable group is `incorrect`, run a
 per-kind group sweep to find which kind is wrong. Enum kinds (role, scenario,
 styles, attack, …) get added to the parallel brute; **exact** kinds

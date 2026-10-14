@@ -29,30 +29,40 @@ routes = {'single_solve': base_id, 'time_trial': base_id + '/time_trial',
 
 print('Day %s -> %s%s' % (day, base_id, '  [parallel]' if parallel else ''))
 results = {}
+# Order matters: solve single_solve FIRST (untimed, no pressure — this is where
+# the decoder is validated and any new family surfaces), then carry what it
+# learned (the control/expansion values, which the brute discovers) forward as
+# PRIORS into time_trial, then into mastery. Mastery's multiple sets decode in
+# parallel inside solve_route. Labels are per-variant, so priors are a first-try
+# shortcut for the brute, never a guarantee.
+ORDER = ['single_solve', 'time_trial', 'mastery']
+modes = [m for m in ORDER if (mode == 'all' or m == mode)]
 
-def run_mode(m):
+def run_mode(m, priors, verbose):
     want_ranked = ranked and m != 'single_solve'
-    res, flag = solve_route(routes[m], ranked=want_ranked, verbose=not parallel)
+    res, flag, learned = solve_route(routes[m], ranked=want_ranked, verbose=verbose, priors=priors)
     if want_ranked and res != 'CORRECT':
         # ranked timed attempt missed the window (or unavailable) -> guarantee the
         # solve untimed. HoF may already be registered from the ranked attempt.
-        res, flag = solve_route(routes[m], ranked=False, verbose=not parallel)
-    return m, res, flag
+        res, flag, learned = solve_route(routes[m], ranked=False, verbose=verbose, priors=priors)
+    return res, flag, learned
 
 if parallel:
-    # Modes are independent routes/attempts -> solve them concurrently (good for
-    # untimed throughput). NB: with --ranked this makes the three timed attempts
-    # contend for server write-throughput, which can cost a borderline HoF window;
-    # for HoF prefer running ranked modes one at a time.
+    # Concurrency override: run modes at once (good for untimed throughput). This
+    # forgoes priors threading, and with --ranked the timed attempts contend for
+    # server throughput; for the learning-first flow use the default (sequential).
     from concurrent.futures import ThreadPoolExecutor
     with ThreadPoolExecutor(max_workers=len(modes)) as pool:
-        for m, res, flag in pool.map(run_mode, modes):
+        for m, (res, flag, _) in zip(modes, pool.map(lambda mm: run_mode(mm, {}, False), modes)):
             results[m] = (res, flag); print('  %-12s %-10s %s' % (m, res, flag))
 else:
+    priors = {}
     for m in modes:
-        print('\n=== %s%s ===' % (m, ' [ranked]' if (ranked and m != 'single_solve') else ''))
-        _, res, flag = run_mode(m)
+        print('\n=== %s%s%s ===' % (m, ' [ranked]' if (ranked and m != 'single_solve') else '',
+                                     ' [priors:%d]' % len(priors) if priors else ''))
+        res, flag, learned = run_mode(m, priors, True)
         results[m] = (res, flag)
+        priors.update(learned)  # carry control/expansion knowledge forward
 
 print('\n==== SUMMARY: Day %s (%s) ====' % (day, base_id))
 for m in modes:
