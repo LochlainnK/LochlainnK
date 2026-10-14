@@ -64,16 +64,25 @@ def solve_route(CH, verbose=True, ranked=False, priors=None):
         bodies = ({'op': 'retry', 'challenge': CH}, {'challenge': CH})
     # Ranked bodies try run_for_time first (fresh timed attempt = HoF); they fall
     # back to untimed. A route with no timed mode returns timed_intent_not_available.
+    TRANSIENT = {'temporarily_unavailable', 'error', 'rate_limited', 'try_again'}
     start = None; solved = False
-    for body in bodies:
-        r = gm.post(body)
-        if not ranked and r.get('result') in ('CORRECT', 'already_solved'):
-            st = gm.status(CH); log('already solved: flag=%s' % st.get('flag'))
-            return 'CORRECT', st.get('flag'), {}
-        if r.get('result') in ('CORRECT', 'already_solved'):
-            solved = True; continue
-        if 'questions' in r and (r.get('artifacts') or r.get('download')):
-            start = r; break
+    for sweep in range(6):            # retry the whole body set through transient errors
+        last_transient = False
+        for body in bodies:
+            r = gm.post(body)
+            if not ranked and r.get('result') in ('CORRECT', 'already_solved'):
+                st = gm.status(CH); log('already solved: flag=%s' % st.get('flag'))
+                return 'CORRECT', st.get('flag'), {}
+            if r.get('result') in ('CORRECT', 'already_solved'):
+                solved = True; continue
+            if 'questions' in r and (r.get('artifacts') or r.get('download')):
+                start = r; break
+            if r.get('error') in TRANSIENT or r.get('result') == 'error':
+                last_transient = True
+        if start is not None or solved or not last_transient:
+            break
+        time.sleep(3)
+        log('transient start error, retrying (%d)...' % (sweep + 1))
     if start is None:
         st = gm.status(CH)
         if solved or st.get('result') == 'CORRECT':

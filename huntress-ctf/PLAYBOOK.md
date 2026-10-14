@@ -353,6 +353,7 @@ Requirements: `python3`, `pyzipper` (`pip install pyzipper`), `node`, `curl`.
 | 10 | Bind Over Matter | 49a4b7078f5d1c4530a8b21f772cbba0 | 4334851f13f26e559b003eb22aaddd4d | e510c993fd3dea2062632e92f9f6b3af |
 | 11 | By Any Other Name | f97fc28f12ab0eff9959e7fe14feb609 | 5c6ad5bb96839bdfe91db3e1d065febe | e6743b3ebd84dae152ea11ae3d35d796 |
 | 13 | Zip Code | 2e316ec6fabe5733c6dce3c9d90a336f | 9c1e02ac82c6a2ad5cd707e7f516cf62 | cf26d3dbfae8d8426a02e2f5e9beb03c |
+| 14 | Trust the Process | 8d37e5c7c70ac353054fe0eaec7d8376 | 8973beec11ee9a2fe4f19af8a8823571 | d3aeb7ca031a733279dc6f4505ca0b5e |
 
 (Days 1–5 and 12 also exist in this lane; new days release daily. Days 6–13
 verified with this toolkit; each new day needed at most a small decoder
