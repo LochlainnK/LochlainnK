@@ -169,13 +169,24 @@ def solve_route(CH, verbose=True, ranked=False, priors=None):
             if not c or c in seen:
                 continue
             seen.add(c)
-            if gm.submit(CH, {i: c}).get('result') in ('accepted', 'CORRECT', 'already_solved'):
-                return i, c
+            # A transient result (rate_limited/error) does NOT mean the candidate is
+            # wrong — the submit never reached a verdict. Retry it a few times with
+            # small backoff so a throttled submit doesn't burn the candidate and leave
+            # the id falsely "stuck" (the failure mode seen on big mastery bundles).
+            for attempt in range(5):
+                res = gm.submit(CH, {i: c}).get('result')
+                if res in ('accepted', 'CORRECT', 'already_solved'):
+                    return i, c
+                if res in ('incorrect', 'expired'):
+                    break  # a real verdict: this candidate is wrong, move on
+                time.sleep(0.4 * (attempt + 1))  # transient -> back off and re-test same candidate
         return i, None
     stuck = []
     prior_hits = 0
     if targets:
-        with ThreadPoolExecutor(max_workers=min(len(targets), 32)) as pool:
+        # Cap concurrency: the server serializes writes, so too many in-flight submits
+        # just trigger rate-limiting. 12 overlaps latency without overwhelming it.
+        with ThreadPoolExecutor(max_workers=min(len(targets), 12)) as pool:
             for i, c in pool.map(brute, targets):
                 if c:
                     ans[i] = c
