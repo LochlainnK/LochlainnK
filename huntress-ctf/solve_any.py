@@ -95,6 +95,7 @@ def solve_route(CH, verbose=True, ranked=False, priors=None):
     qs = start['questions']; ids = start['answer_ids']
     base = tempfile.mkdtemp(prefix='slv_')
     ans = {}
+    soft = {}   # id -> ordered brute candidates for variant-dependent kinds
     multi = any('.' in i for i in ids)
 
     def subq(tag):
@@ -111,7 +112,8 @@ def solve_route(CH, verbose=True, ranked=False, priors=None):
             z = os.path.join(dd, 'z.zip'); gm.download(src[1], z); unz(z, dd)
         else:  # already-extracted inner zip at src[1]
             unz(src[1], dd)
-        return tag, S.solve(dd, sub)
+        sf = {}
+        return tag, S.solve(dd, sub, sf), sf
 
     if multi:
         arts = start.get('artifacts') or []
@@ -126,14 +128,16 @@ def solve_route(CH, verbose=True, ranked=False, priors=None):
             for tag, inner in zip(tags, inners):
                 jobs.append((os.path.join(base, tag), subq(tag), tag, ('inner', os.path.join(base, inner))))
         with ThreadPoolExecutor(max_workers=min(len(jobs), 8)) as pool:
-            for tag, d in pool.map(decode_set, jobs):
+            for tag, d, sf in pool.map(decode_set, jobs):
                 for k, v in d.items():
                     ans[tag + '.' + k] = v
+                for k, cands in sf.items():
+                    soft[tag + '.' + k] = cands
     else:
         z = os.path.join(base, 'z.zip')
         gm.download(start.get('download') or start['artifacts'][0]['download'], z)
         unz(z, base)
-        for k, v in S.solve(base, qs).items():
+        for k, v in S.solve(base, qs, soft).items():
             ans[k] = v
 
     kof = {i: S.kind_of(i.split('.', 1)[-1]) for i in ids}
@@ -141,11 +145,11 @@ def solve_route(CH, verbose=True, ranked=False, priors=None):
     log('decoded %d/%d  undecoded-kinds=%s' % (len(ids) - len(undec), len(ids),
                                                set(kof[i] for i in undec)))
 
-    reliable = [i for i in ids if kof[i] not in HARD and ans.get(i) not in (None, '')]
+    reliable = [i for i in ids if kof[i] not in HARD and i not in soft and ans.get(i) not in (None, '')]
     rr = gm.submit(CH, {i: ans[i] for i in reliable}).get('result')
     log('reliable group: %s' % rr)
 
-    targets = [i for i in ids if kof[i] in HARD]
+    targets = [i for i in ids if kof[i] in HARD or i in soft]
     if rr not in ('accepted', 'CORRECT'):  # a reliable kind is wrong (new day) -> localize
         g = collections.defaultdict(list)
         for i in reliable:
@@ -165,7 +169,8 @@ def solve_route(CH, verbose=True, ranked=False, priors=None):
     def brute(i):
         rk = i.split('.', 1)[-1]
         seen = set()
-        for c in ([priors.get(rk), ans.get(i)] + cpool(i, kof[i])):
+        pool = soft[i] if i in soft else cpool(i, kof[i])
+        for c in ([priors.get(rk), ans.get(i)] + pool):
             if not c or c in seen:
                 continue
             seen.add(c)

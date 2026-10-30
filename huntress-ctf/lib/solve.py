@@ -9,16 +9,109 @@ def lang_of(fn):
 
 ADVANCED={'indirect-expansion.sh','token-fragmentation.sh','array-slicing.sh','associative-arrays.sh'}
 
+# ---- derived-field helpers (campaign token / url host / path leaf) ----
+def _tok(c):   return c.rsplit('-',1)[-1] if c else None
+def _host(u):
+    m=re.search(r'https?://([^/]+)', u) if u else None
+    return m.group(1) if m else None
+def _leaf(p):  return re.split(r'[\\/]', p)[-1] if p else None
+
+# Kinds whose exact value is variant dependent (the 'indicator' IOC, the ps1
+# secondary/tertiary artifacts, and bat/vbs 'style' whose control/expansion
+# components reuse the unreliable detectors). We emit a best-guess primary answer
+# AND an ordered candidate list; solve_route brutes the list per-id (monotonic
+# banking makes the first-try guess a shortcut, never a requirement).
+SOFT_KINDS={'indicator','secondary','tertiary','style'}
+BAT_CTRL=['direct','goto_dispatch','call_subroutine','for_once','if_guard','errorlevel_guard']
+VBS_CTRL=['direct','for_once','do_once','while_once','select_case','error_guard']
+EXP=['for_indirect','delayed','call_double','percent']
+
+def _indicator_cands(f):
+    # Per the challenge: "the first indicator present in the decoded descriptor
+    # using this order: URL, upload URL, next-stage file, file path, schedule
+    # path, recovery-note name, host id." Role-independent, first-present wins.
+    out=[]
+    for k in ('url','upload_url','next_stage','file_path','source_path','target_root',
+              'schedule_path','cron_path','note_name'):
+        v=f.get(k)
+        if v and v not in out: out.append(v)
+    h=f.get('host_id') or _host(f.get('url'))
+    if h and h not in out: out.append(h)
+    return out
+
+def _dedup_first(primary, rest):
+    out=[primary] if primary else []
+    for x in rest:
+        if x and x not in out: out.append(x)
+    return out
+
+def _v1_op(name, s):
+    # one codec step; s is str or bytes, returns bytes (rev keeps type)
+    name=name.lower()
+    if name=='rev':
+        return s[::-1]
+    t=s.decode('latin1') if isinstance(s,bytes) else s
+    if name in ('b64','base64'):
+        t=re.sub(r'\s','',t); return base64.b64decode(t+'='*(-len(t)%4))
+    if name in ('b32','base32'):
+        t=re.sub(r'\s','',t).upper(); return base64.b32decode(t+'='*(-len(t)%8))
+    if name=='hex': return bytes.fromhex(re.sub(r'[^0-9a-fA-F]','',t))
+    if name=='frag': return bytes.fromhex(t.replace('.',''))
+    if name=='hb64':
+        inner=bytes.fromhex(t).decode('latin1'); return base64.b64decode(inner+'='*(-len(inner)%4))
+    raise ValueError('v1 op '+name)
+
+def _chain_op(name, s):
+    # one LYR codec step: str -> str. Unlike the standalone FRAG *prefix*
+    # (which is hex+dots), 'frag' inside a chain is a pure de-fragmentation
+    # (strip the dot delimiters); the hex/b64/b32 layers are named separately.
+    name=name.lower()
+    if name=='rev':  return s[::-1]
+    if name=='frag': return s.replace('.','')
+    if name in ('b64','base64'):
+        t=re.sub(r'\s','',s); return base64.b64decode(t+'='*(-len(t)%4)).decode('latin1')
+    if name in ('b32','base32'):
+        t=re.sub(r'\s','',s).upper(); return base64.b32decode(t+'='*(-len(t)%8)).decode('latin1')
+    if name=='hex':  return bytes.fromhex(re.sub(r'\s','',s)).decode('latin1')
+    if name=='hb64':
+        inner=bytes.fromhex(re.sub(r'\s','',s)).decode('latin1')
+        return base64.b64decode(inner+'='*(-len(inner)%4)).decode('latin1')
+    raise ValueError('v1 chain op '+name)
+
+def _apply_chain(layers, body):
+    import itertools
+    # the chain names the ENCODE order; the correct decode is some ordering of
+    # the inverse ops. Try the natural reverse first, then every permutation,
+    # and accept the one that yields a well-formed descriptor.
+    orders=[layers[::-1], layers]+[list(p) for p in itertools.permutations(layers)]
+    for order in orders:
+        cur=body; ok=True
+        for op in order:
+            try: cur=_chain_op(op,cur)
+            except Exception: ok=False; break
+        if ok and cur[:2]=='v=':
+            return cur.encode('latin1')
+    raise ValueError('LYR chain failed: '+'_'.join(layers))
+
+def _v1_bytes(pfx, body):
+    p=pfx.upper()
+    if p in ('B64','HEX','FRAG','HB64'): return _v1_op(p, body)
+    if p=='LYR':                 # layered: LYR-<codec[_codec...]>-<body>
+        chain,_,rest=body.partition('-'); return _apply_chain(chain.split('_'), rest)
+    raise ValueError('v1 prefix '+pfx)
+
 def v1_desc(txt):
-    m=re.search(r'HUNTRESS_ANALYSIS_V1:([A-Z0-9]+)-([A-Za-z0-9+/=._-]+)',txt)
-    pfx,body=m.group(1),m.group(2)
-    if pfx=='B64': b=base64.b64decode(body+'='*(-len(body)%4))
-    elif pfx=='HEX': b=bytes.fromhex(body)
-    elif pfx=='FRAG': b=bytes.fromhex(body.replace('.',''))
-    elif pfx=='HB64':
-        inner=bytes.fromhex(body).decode('latin1'); b=base64.b64decode(inner+'='*(-len(inner)%4))
-    else: raise ValueError('v1 prefix '+pfx)
-    return b.decode('latin1')
+    m=re.search(r'HUNTRESS_ANALYSIS_V1:([A-Za-z0-9]+)-([A-Za-z0-9+/=._-]+)',txt)
+    if m:
+        pfx,body=m.group(1),m.group(2)
+    else:
+        # SPLIT form (e.g. Google Apps Script): the PREFIX-body string is chopped
+        # into an array of quoted fragments that .join("") back together.
+        sm=re.search(r'HUNTRESS_ANALYSIS_V1_SPLIT\w*\s*=\s*\[(.*?)\]', txt, re.S)
+        joined=''.join(re.findall(r'"((?:\\.|[^"\\])*)"', sm.group(1)))
+        pm=re.match(r'([A-Za-z0-9]+)-(.*)$', joined, re.S)
+        pfx,body=pm.group(1),pm.group(2)
+    return _v1_bytes(pfx,body).decode('latin1')
 
 _MAT=re.compile(r'Material_\w+\s*=\s*"((?:\\.|[^"\\])*)"')
 def mjs_desc(path):
@@ -116,7 +209,9 @@ PS_META={'resource-sample.ps1':('resource_hijacking','T1496'),
 def pick(vals,pred):
     return next((v for v in vals if pred(v)),None)
 
-def solve(exdir, questions):
+def solve(exdir, questions, soft=None):
+    # soft: optional {id -> [candidate,...]} populated for SOFT_KINDS so the caller
+    # can brute them per-id. ans[id] holds the first-try best guess either way.
     byfile={}
     for q in questions:
         fn=q['artifact'].split('-> ')[-1].strip()
@@ -126,7 +221,7 @@ def solve(exdir, questions):
     ans={}
     for fn,ids in byfile.items():
         lang=lang_of(fn); path=os.path.join(exdir,fn)
-        rep=tr=None; vbtext=None; src=None; v1=False
+        rep=tr=None; vbtext=None; src=None; v1=False; vals=[]
         txt=None if lang=='ps' else open(path,encoding='latin1').read()
         if txt and 'HUNTRESS_ANALYSIS_V1:' in txt:
             v1=True; desc=v1_desc(txt); f=fields(desc)
@@ -134,6 +229,21 @@ def solve(exdir, questions):
             steps=f.get('steps','').split(','); role=f.get('role'); att=f.get('attack')
         elif lang=='ps':
             vals=ps_values(path)
+            # classify by CONTENT (filenames are randomized in later variants)
+            ps_url=pick(vals,lambda x:x.startswith('http'))
+            ps_wallet=pick(vals,lambda x:x.startswith('wallet_'))
+            ps_mutex=pick(vals,lambda x:x.startswith('Global\\'))
+            ps_note=pick(vals,lambda x:x.upper().startswith('RECOVER'))
+            ps_ext=pick(vals,lambda x:x.startswith('.'))
+            ps_ua=pick(vals,lambda x:x.startswith('Mozilla'))
+            ps_zip=pick(vals,lambda x:x.endswith('.zip'))
+            ps_dat=pick(vals,lambda x:re.match(r'update-.*\.dat$',x))
+            if ps_wallet:                       # resource hijacking
+                ps_scen,ps_att,ps_sec,ps_ter='resource_hijacking','T1496',ps_wallet,ps_mutex
+            elif ps_note or ps_ext:             # ransomware impact
+                ps_scen,ps_att,ps_sec,ps_ter='synthetic_impact','T1486',ps_note,ps_ext
+            else:                               # browser-credential collection
+                ps_scen,ps_att,ps_sec,ps_ter='synthetic_collection','T1555.003',(ps_zip or ps_dat),ps_ua
         elif lang=='js':
             d=jsdesc[fn]; f=d.get('values',{}); steps=d['steps']; src=open(path,encoding='latin1').read()
             f=dict(f); f['adapter']=d.get('adapter'); f['stage_count']=d.get('stageCount'); f['steps']=','.join(steps)
@@ -155,15 +265,9 @@ def solve(exdir, questions):
         for aid in ids:
             k=kind_of(aid)
             if lang=='ps':
-                sc,at=PS_META[fn]
-                v={'scenario':sc,'attack':at,
-                   'url':pick(vals,lambda x:x.startswith('http')),
-                   'wallet':pick(vals,lambda x:x.startswith('wallet_')),
-                   'mutex':pick(vals,lambda x:x.startswith('Global\\')),
-                   'extension':pick(vals,lambda x:x.startswith('.')),
-                   'note_name':pick(vals,lambda x:x.upper().startswith('RECOVER')),
-                   'user_agent':pick(vals,lambda x:x.startswith('Mozilla')),
-                   'psfile':pick(vals,lambda x:re.match(r'update-.*\.dat$',x))}.get(k)
+                v={'scenario':ps_scen,'attack':ps_att,'url':ps_url,'wallet':ps_wallet,
+                   'mutex':ps_mutex,'extension':ps_ext,'note_name':ps_note,'user_agent':ps_ua,
+                   'psfile':ps_dat,'secondary':ps_sec,'tertiary':ps_ter}.get(k)
             elif k=='role': v=role
             elif k=='attack': v=att
             elif k=='adapter': v=f.get('adapter')
@@ -176,9 +280,48 @@ def solve(exdir, questions):
             elif k=='control': v=D.vbs_control(vbtext) if lang=='vbs' else D.batch_control(lines,base)
             elif k=='expansion': v=D.batch_expansion(lines,base)
             elif k in ('fnstyle','invstyle','propstyle'):
-                fs,inv,ps=D.js_styles(src); v={'fnstyle':fs,'invstyle':inv,'propstyle':ps}[k]
+                fs,inv,ps=D.js_styles(src or txt or ''); v={'fnstyle':fs,'invstyle':inv,'propstyle':ps}[k]
+            elif k=='style':
+                # js: function|invocation|property triple (reliable).
+                # bat: behavior-graph|control|expansion ; vbs: representation|transform|control.
+                # The control/expansion components reuse the unreliable detectors, so bat/vbs
+                # style is bruted (graph/rep/transform come from the descriptor and are fixed).
+                if lang in ('js','mjs'):
+                    fs,inv,ps=D.js_styles(src or txt or ''); v='|'.join([fs,inv,ps])
+                    if soft is not None:
+                        import itertools as _it
+                        FN=['declaration','named_expression','anonymous_expression']
+                        INV=['direct','call','apply']; PR=['dot','bracket_literal','mixed']
+                        soft[aid]=_dedup_first(v, ['|'.join(t) for t in _it.product(FN,INV,PR)])
+                elif lang=='bat':
+                    g=f.get('graph'); c=D.batch_control(lines,base); e=D.batch_expansion(lines,base)
+                    v='%s|%s|%s'%(g,c,e)
+                    if soft is not None:
+                        soft[aid]=_dedup_first(v, ['%s|%s|%s'%(g,cc,ee) for cc in BAT_CTRL for ee in EXP])
+                elif lang=='vbs':
+                    c=D.vbs_control(vbtext); v='%s|%s|%s'%(rep,tr,c)
+                    if soft is not None:
+                        soft[aid]=_dedup_first(v, ['%s|%s|%s'%(rep,tr,cc) for cc in VBS_CTRL])
+                else:
+                    v=f.get('style')
+            elif k=='carrier':
+                v='%s|%s'%(f.get('carrier'),f.get('windows_chain')) if lang=='py' else f.get('carrier')
+            elif k=='obfuscation':
+                v='%s|%s'%(f.get('syntax'),f.get('obfuscation')) if lang=='py' else f.get('obfuscation')
+            elif k=='token':   v=_tok(f.get('campaign_id'))
+            elif k=='host_id': v=f.get('host_id') or _host(f.get('url'))
+            elif k=='leaf':    v=_leaf(f.get('file_path'))
+            elif k=='indicator':
+                cands=_indicator_cands(f)
+                v=cands[0] if cands else None
+                if soft is not None and len(cands)>1: soft[aid]=cands
             else:
                 v=f.get(k)
+            # ps1 secondary/tertiary are variant dependent -> offer the full value
+            # set as brute candidates (best guess first) so the solver self-corrects.
+            if soft is not None and lang=='ps' and k in ('secondary','tertiary') and vals:
+                ordered=([v]+[x for x in vals if x!=v]) if v else list(vals)
+                if len(ordered)>1: soft[aid]=ordered
             ans[aid]=v
     return ans
 
