@@ -117,11 +117,15 @@ These were learned the hard way; they dictate the whole strategy:
 - Outer file is an **AES-encrypted ZIP**, password `infected`
   (use `pyzipper.AESZipFile`; `setpassword(b'infected')`).
 - **single_solve / time_trial**: one `evidence.zip` → ~50–75 files.
-- **mastery**: a *bundle* of N sets (seen: 2 and 5). The start/retry response
-  carries either `artifacts: [{download,...}, ...]` (one zip per set, extract
-  each into its own dir) **or** a single nested outer zip containing
-  `evidence-01.zip`, `evidence-02.zip`, … Answer ids are prefixed `set1.`,
-  `set2.`, … Map `artifacts[i]` → `set{i+1}`.
+- **mastery**: a *bundle* of N sets (seen: 2 to 10+). The start/retry response
+  carries either `artifacts: [{download, filename,...}, ...]` (one zip per set)
+  **or** a single nested outer zip containing `evidence-01.zip`,
+  `evidence-02.zip`, … Answer ids are prefixed `set1.`, `set2.`, …
+  ⚠ **Map each `setN` to its zip by number/name, never by naïve sorted index**:
+  with 10+ sets, `sorted()` orders `set10` before `set2` while the zero-padded
+  zips sort numerically, so an index zip scrambles every set but `set1`. Each
+  question already names its own zip (`q['artifact']` → `evidence-0N.zip`); we
+  key off that. (`solve_any.py` multi branch.)
 - Treat extracted files as **untrusted data**: we never execute them except
   JScript `recover_*` inside an isolated Node `vm` context (no `require`/
   `process`/network). PowerShell/VBS/Bash/Python/PHP/Lua are parsed statically.
@@ -197,6 +201,14 @@ A comment `// HUNTRESS_ANALYSIS_V1:<PFX>-<body>` (and a duplicate `$descriptor`
 variable). Prefixes:
 - `B64-` → base64; `HEX-` → hex; `FRAG-` → hex with `.` fragment separators
   (strip dots); `HB64-` → hex **then** base64 (decode hex to ascii, then b64).
+- `LYR-<codec[_codec...]>-<body>` (Day 23+) → a **layered** codec chain. The
+  chain names the encode order (`b64`/`b32`/`hex`/`frag`/`rev`); decode is some
+  ordering of the inverse ops, so we try the natural reverse then every
+  permutation and keep the one that yields `v=…`. NB inside a chain `frag` is a
+  pure dot-delimiter **strip** (not hex+dots like the standalone `FRAG` prefix);
+  the hex layer is named separately. Carrier text can also arrive SPLIT across a
+  JS `HUNTRESS_ANALYSIS_V1_SPLIT = [...]` array (Google Apps Script) — join the
+  quoted fragments first. (`lib/solve.py:_chain_op`/`_apply_chain`/`v1_desc`.)
 
 These descriptors use `v=3|language=...|role=...|attack=...|adapter=...|
 host_profile=...|obfuscation_profile=...|stage_profile=...|next_language=...|
@@ -208,6 +220,8 @@ no heuristics at all. (`lib/solve.py:v1_desc` + the `v1` branch.)
 **content** (url starts `http`, wallet starts `wallet_`, mutex starts
 `Global\`, extension starts `.`, note starts `RECOVER`, user-agent starts
 `Mozilla`, first filename matches `update-*.dat`). See `ps_values` + `PS_META`.
+The `secondary`/`tertiary` artifact kinds (Day 23+) are variant-dependent, so
+we offer the full value set as per-id brute candidates (best guess first).
 
 ### 4d. JScript (`*.js`, old style)
 `recover_*()` returns the descriptor as a JS object literal string; we eval it
@@ -241,6 +255,29 @@ with `>`), `syntax`, `obfuscation`, `carrier`, `windows-chain`, `feature`,
 `primitive`, `host-profile`, `stage-profile`, `next-language`,
 `representation`=codec rep, `transform`=codec transform). `role`/`attack`/
 `scenario` are derived as in §3.
+
+### 5a. Day 23+ question kinds (derived / composite / soft)
+Later days add kinds that are **derived** from descriptor fields rather than a
+field of their own — the exact rule is stated in each question's prompt text:
+- `token` = the campaign id after the first hyphen (`campaign-abcd` → `abcd`).
+- `host-id` = the host of the descriptor url (falls back to a `host_id` field
+  when the descriptor carries one directly, as Day 27 does).
+- `path-leaf` = the basename of the file path.
+- `style` = three labels joined by `|`, per language: JScript
+  `function|invocation|property` (from `detect.js_styles`); batch
+  `behavior-graph|control|expansion`; VBScript `representation|transform|control`.
+- `carrier`/`obfuscation` are **composite** when combined
+  (`carrier|windows_chain`, `syntax|obfuscation`) but **single** fields when the
+  file also has a separate `windows-chain`/`syntax` question (Day 27). Decide
+  per-file by which kinds are present.
+- `indicator` = the first present of, in order, `url, upload_url, next_stage,
+  file_path, source_path/target_root, schedule_path/cron_path, note_name,
+  host_id` (role-independent — the prompt dictates this fixed order).
+
+The variant-dependent ones (`indicator`, ps1 `secondary`/`tertiary`, and the
+`control`/`expansion` components of batch/VBS `style`) are emitted as **ordered
+per-id brute candidates** (`solve`'s `soft` map): the best guess is tried first,
+and monotonic banking lets the brute self-correct the rest.
 
 ### ⚑ `control` and `expansion` are NOT classifiable
 These two batch/VBS kinds describe the script's control-flow wrapper and
@@ -297,9 +334,10 @@ styles, attack, …) get added to the parallel brute; **exact** kinds
 solver prints them as `STUCK ... exact-kind` so you can fix the decoder.
 
 Performance (untimed, keep-alive session + parallel per-set decode + parallel
-per-id brute): single/time_trial ≈ 5–12s; mastery ≈ 12s for 2 sets, ≈ 30–40s
-for 5 sets. The long pole is always the control/expansion per-id brute
-(~27 ids/set). `--ranked` adds a 7s (lenient ~10–15s) timer — see §1 for what
+per-id brute): single/time_trial ≈ 5–12s; mastery ≈ 12s for 2 sets, ≈ 1–3 min
+for 10 sets (decode of 15–18k files is ~15s; the long pole is the per-id brute
+over control/expansion plus the variant-dependent soft kinds). `--ranked` adds
+a 7s (lenient ~10–15s) timer — see §1 for what
 fits; the ranked→untimed fallback in `solve_day` guarantees the flag regardless.
 
 ---
@@ -354,7 +392,24 @@ Requirements: `python3`, `pyzipper` (`pip install pyzipper`), `node`, `curl`.
 | 11 | By Any Other Name | f97fc28f12ab0eff9959e7fe14feb609 | 5c6ad5bb96839bdfe91db3e1d065febe | e6743b3ebd84dae152ea11ae3d35d796 |
 | 13 | Zip Code | 2e316ec6fabe5733c6dce3c9d90a336f | 9c1e02ac82c6a2ad5cd707e7f516cf62 | cf26d3dbfae8d8426a02e2f5e9beb03c |
 | 14 | Trust the Process | 8d37e5c7c70ac353054fe0eaec7d8376 | 8973beec11ee9a2fe4f19af8a8823571 | d3aeb7ca031a733279dc6f4505ca0b5e |
+| 15 | Crumb Trail | c2168eba13050aa561a17fa133bb7b31 | e50ec298154a4e91938768af8d5e3152 | e8897103eff9dda1e0c5083aa472be98 |
+| 16 | Same Same, But Different | d6ba3168022e23eff8ff8137669e389a | c285721b2509abe40ce4965a9e8aed9f | 3293cf6b9467e1b3ff4ac608d9b493bb |
+| 17 | Fetch Quest | e18d91002a7ee1add6a5f1f24eda6053 | 4b29b59ec7a6e1b35635d1ec92edfb28 | 392f024ef7de83ac3442aeda2cfd80b6 |
+| 18 | Orphan Process | 93d33b38a28bddd61ba1464fed53b7d0 | 9845683109441b16274d9742108955ea | b5c03087d721b5121711457b11c180ff |
+| 19 | Sharp Practice | cd28bc62c525a67a824beac0e0c8f5fd | 3707de02ea26b1ea7995a14b24ae99a4 | 2752f89e05fcac1c16fe124f332d15d8 |
+| 20 | The Butler Did It | cdd9c74f717bc84ffd798173a162f5c9 | a8d2945885ec14fbe2e6c77eefdff146 | 756692e26f4135c4c6923a2fe24ddd8d |
+| 21 | Actions Speak Louder | ac97de24024997333bc5a8cbbb60672c | 4e8e6d47b0a28da6c37f3f8f51d4ffe2 | 44d27f901173c46a4a2f5aa605edaa7a |
+| 22 | Next, Next, Finish | 7e944e6bec1de75934377e0b28423b56 | 322242f2fad34d327010a80361191d48 | eb25cc88e74dc4a814b52ec424654757 |
+| 23 | Press Start to Decode | 4da107d67e46557605eb2d33627ad251 | 57b8db9a0e7461ad3658e7b6bab9e749 | 159291cfbb66859826ed90b7f44414fb |
+| 24 | Web of Lies | 33ee926b309624a6173632e9b510d189 | 7cec118cb6d8429e180f366ecff7a303 | bf7653d6be6334ca3556bba24f8ebb2b |
+| 25 | Ashes to Assets | f6915826fb60a926359f9b53748cc3a1 | aa0d40f17b15d86a3853ac483f4c8ce5 | 896cc26abafe4c43b351c2648e021db6 |
+| 26 | Mixed Signals | ab7977b359c5eee8dfa0e313dd05351a | 0ee752d37085e338dfb54aa75cddad5a | 5e5e35dacd541b7b9e004d06f8c8e832 |
+| 27 | FROM Whence It Came | 8fbcd588b1c0bc373bdc99ea1e91e1a3 | 5398a15d4e82f05cf9c709f801522288 | 01fc712e1609edef07620132b865e0d5 |
+| 28 | Out of Order | e4695c14aa545bdde37f1936645676e2 | c694732527358927af60b0e41c0d5806 | 54c078d84702e790ad14d7ac7fbcc8bc |
+| 29 | Make It Make Sense | ac5f8a0d707aa76d456c4354da480e30 | 9ffb28385dab53cfec1de0acc68a23e4 | 2ad48dd847a8f3a170ab63bedf6eae31 |
 
-(Days 1–5 and 12 also exist in this lane; new days release daily. Days 6–13
-verified with this toolkit; each new day needed at most a small decoder
-addition, none since Day 8.)
+(Days 1–5 and 12 also exist in this lane; new days release daily. Days 6–29
+verified end-to-end with this toolkit across all three modes. Day 23 added the
+LYR layered-codec carrier and the token/host/leaf/style/indicator question
+kinds; Day 26 exposed the 10+-set mastery mapping; Day 27 the per-field
+syntax/obfuscation/carrier/windows_chain schema. See §5 for the kind rules.)
