@@ -9,7 +9,7 @@ Strategy (banking is ATOMIC per submission — see PLAYBOOK.md §1):
 
 Usage: HUNTRESS_GM_TOKEN=... python3 solve_any.py <challenge-route>
 """
-import os, sys, time, tempfile, collections
+import os, sys, time, tempfile, collections, re
 from concurrent.futures import ThreadPoolExecutor
 HERE = os.path.dirname(os.path.abspath(__file__))
 sys.path.insert(0, os.path.join(HERE, 'lib'))
@@ -117,15 +117,27 @@ def solve_route(CH, verbose=True, ranked=False, priors=None):
 
     if multi:
         arts = start.get('artifacts') or []
-        tags = sorted({i.split('.', 1)[0] for i in ids})
+        # Each tag's questions name their own evidence zip (e.g. set10 -> evidence-10.zip).
+        # Map tag->zip NAME explicitly: never by naive sorted-index, because lexical
+        # order puts set10 before set2 while the zips are zero-padded (set mismatch bug).
+        tag_zip = {}
+        for q in qs:
+            t = q['id'].split('.', 1)[0]
+            tag_zip.setdefault(t, q['artifact'].split('->')[0].strip())
+        tnum = lambda t: int(re.search(r'\d+', t).group()) if re.search(r'\d+', t) else 0
+        tags = sorted(tag_zip, key=tnum)
         jobs = []
         if arts and len(arts) >= len(tags):
+            by_name = {a.get('filename'): a for a in arts if a.get('filename')}
             for idx, tag in enumerate(tags):
-                jobs.append((os.path.join(base, tag), subq(tag), tag, ('dl', arts[idx]['download'])))
+                a = by_name.get(tag_zip.get(tag)) or arts[idx]
+                jobs.append((os.path.join(base, tag), subq(tag), tag, ('dl', a['download'])))
         else:
             oz = os.path.join(base, 'o.zip'); gm.download(start['download'], oz); unz(oz, base)
-            inners = sorted(f for f in os.listdir(base) if f.endswith('.zip') and f != 'o.zip')
-            for tag, inner in zip(tags, inners):
+            present = {f for f in os.listdir(base) if f.endswith('.zip') and f != 'o.zip'}
+            inums = sorted(present, key=lambda f: int(re.search(r'\d+', f).group()) if re.search(r'\d+', f) else 0)
+            for idx, tag in enumerate(tags):
+                inner = tag_zip.get(tag) if tag_zip.get(tag) in present else (inums[idx] if idx < len(inums) else None)
                 jobs.append((os.path.join(base, tag), subq(tag), tag, ('inner', os.path.join(base, inner))))
         with ThreadPoolExecutor(max_workers=min(len(jobs), 8)) as pool:
             for tag, d, sf in pool.map(decode_set, jobs):

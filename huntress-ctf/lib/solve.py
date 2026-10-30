@@ -262,6 +262,7 @@ def solve(exdir, questions, soft=None):
                 role='advanced_syntax'; att='T1059.004'
             else:
                 role=role_of(steps); att=attack_of(role,lang)
+        fkinds={kind_of(i) for i in ids}   # question kinds present for this file
         for aid in ids:
             k=kind_of(aid)
             if lang=='ps':
@@ -305,9 +306,16 @@ def solve(exdir, questions, soft=None):
                 else:
                     v=f.get('style')
             elif k=='carrier':
-                v='%s|%s'%(f.get('carrier'),f.get('windows_chain')) if lang=='py' else f.get('carrier')
+                # python: composite 'carrier|windows_chain' UNLESS the file also has a
+                # separate windows_chain question (then each is asked singly).
+                if lang=='py' and 'windows_chain' not in fkinds:
+                    v='%s|%s'%(f.get('carrier'),f.get('windows_chain'))
+                else: v=f.get('carrier')
             elif k=='obfuscation':
-                v='%s|%s'%(f.get('syntax'),f.get('obfuscation')) if lang=='py' else f.get('obfuscation')
+                # python: composite 'syntax|obfuscation' UNLESS a separate syntax question exists.
+                if lang=='py' and 'syntax' not in fkinds:
+                    v='%s|%s'%(f.get('syntax'),f.get('obfuscation'))
+                else: v=f.get('obfuscation')
             elif k=='token':   v=_tok(f.get('campaign_id'))
             elif k=='host_id': v=f.get('host_id') or _host(f.get('url'))
             elif k=='leaf':    v=_leaf(f.get('file_path'))
