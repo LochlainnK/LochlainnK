@@ -408,9 +408,10 @@ Requirements: `python3`, `pyzipper` (`pip install pyzipper`), `node`, `curl`.
 | 28 | Out of Order | e4695c14aa545bdde37f1936645676e2 | c694732527358927af60b0e41c0d5806 | 54c078d84702e790ad14d7ac7fbcc8bc |
 | 29 | Make It Make Sense | ac5f8a0d707aa76d456c4354da480e30 | 9ffb28385dab53cfec1de0acc68a23e4 | 2ad48dd847a8f3a170ab63bedf6eae31 |
 | 30 | BeanShell JSP Graph | 3098e0817b7d8017fae6a14418c56899 | e42391761194175b8e6ba37b4b94991f | 539894b3518df043abdfeae88f3d44b4 |
+| 31 | XSLT Final Gauntlet | 3d2fca914a4a9917f35c55d8e6dc0751 | 2b1b8562b2bf7e83b8a39c06a3a198e5 | a9b4fc6b3845babb39780c0f42ba61d8 |
 
-(Days 1–5 and 12 also exist in this lane; new days release daily. Days 6–30
-verified end-to-end with this toolkit across all three modes. Day 23 added the
+(Days 1–5 and 12 also exist in this lane. Days 6–31 (the full event) verified
+end-to-end with this toolkit across all three modes. Day 23 added the
 LYR layered-codec carrier and the token/host/leaf/style/indicator question
 kinds; Day 26 exposed the 10+-set mastery mapping; Day 27 the per-field
 syntax/obfuscation/carrier/windows_chain schema. See §5 for the kind rules.)
